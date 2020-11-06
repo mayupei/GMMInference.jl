@@ -1,5 +1,5 @@
 """
-An `IVLogitShare` model consists of outcomes, `y` ∈ (0,1),  regressors
+An `efficientIV` model consists of outcomes, `y` ∈ (0,1),  regressors
 `x` and instruments `z`.  The moment condition is
 ``E[ g(z)(y-x β) ] = 0``
 
