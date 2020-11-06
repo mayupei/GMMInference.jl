@@ -1,13 +1,13 @@
 """
     RCLogit <: GMMModel
 
-A random coefficients logit model with endogeneity. 
+A random coefficients logit model with endogeneity.
 An `RCLogit` model consists of outcomes, `y` ∈ (0,1),  regressors
 `x`, instruments `z`, and random draws `ν ∼ N(0,I)`.  The moment condition is
 
 ``E[ξz] = 0``
 
-where 
+where
 
 `` y = ∫ exp(x(β + ν) + ξ)/(1 + exp(x(β + ν) + ξ)) dΦ(ν;Σ) ``
 
@@ -16,13 +16,12 @@ where Φ(ν;Σ) is the normal distribution with variance Σ.
 The dimensions of `x`, `y`, `z`, and `ν` must be such that
 `length(y) == size(x,1) == size(z,1) == size(ν,2)`
 and
-`size(ν,3) == size(x,2) ≤ size(z,2)`. 
+`size(ν,3) == size(x,2) ≤ size(z,2)`.
 """
-struct RCLogit <: GMMModel
-  x::Matrix{Float64}
+mutable struct efficientIV <: GMMModel
+  x::Vector{Float64}
   y::Vector{Float64}
-  z::Matrix{Float64}
-  ν::Array{Float64,3}
+  z::Vector{Float64}
 end
 
 """
@@ -41,68 +40,78 @@ Simulates a RCLogit model.
 - `ρ` correlation between x[:,1] and structural error.
 - `nsim` number of draws of `ν` for monte-carlo integration
 """
-function RCLogit(n::Integer, β::AbstractVector,
-                 π::AbstractMatrix, Σ::AbstractMatrix,
-                 ρ, nsim=100)
-  z = randn(n, size(π)[1])
-  endo = randn(n, length(β))
-  x = z*π .+ endo
-  ξ = rand(Normal(0,sqrt((1.0-ρ^2))),n).+endo[:,1]*ρ
-  ν = randn(nsim,n,length(β))
-  U = cholesky(Σ).U
-  y = zeros(n)
-  for s in 1:nsim
-    y .= y .+ cdf.(Logistic(), x*β .+ sum(x.*(ν[s,:,:]*U),dims=2) .+ ξ)[:]
-  end
-  y  .= y./nsim
-  #ν = randn(nsim÷10,n,length(β))
-  RCLogit(x,y,z,ν)
+
+function efficientIV(n, β, ρ, π, a)
+    """
+    n:= sample size
+    β:= true beta
+    ρ:= correlation coefficient
+    """
+    # (a) generate z
+    w=rand(n)
+    w1=(w.<0.2)*1.0
+    w2=(w.>=0.2).*(w.<0.4)*1.0
+    w3=(w.>=0.4).*(w.<0.6)*1.0
+    w4=(w.>=0.6)*1.0
+    z=a[1].*w1+a[2].*w2+a[3].*w3+a[4].*w4
+
+    # (b) Matrix of Errors
+    A=[1 ρ; ρ 1]
+    ev=randn(n,2)*sqrt(A)
+    one=ones(n)
+    u=(one+z).*ev[:,1]
+
+    # (c) Creating the X, Y vectors
+    x = π.*z+ ev[:, 2]
+    y = x.*β+u
+
+    #Return the simulated data
+    return (efficientIV(x,y,z))
 end
 
-number_parameters(model::RCLogit) = size(model.x,2) +
-  size(model.x,2)*(size(model.x,2)-1) ÷ 2 + number_observations(model)
-number_observations(model::RCLogit) = length(model.y)
-number_moments(model::RCLogit) = size(model.z,2)
+number_parameters(model::efficientIV) = size(model.x,2)
+number_observations(model::efficientIV) = length(model.y)
+number_moments(model::efficientIV) = size(model.x,2)
 
-function get_gi(model::RCLogit)
-  function(θ)
-    n = number_observations(model)
-    ξ = θ[(length(θ)-n+1):end]
-    ξ.*model.z
-  end
-end
+function gz_hat(model::efficientIV)
+    n=number_observations(model)
+    β_2sls = (model.z'*model.x)^(-1)*model.z'*model.y
+    uhat_2sls = model.y .- model.x .* β_2sls
 
-"""
-    gmm_constraints(model::RCLogit)
-
-Returns 
-
-`` c(θ) = ∫ exp(x(β + ν) + ξ)/(1 + exp(x(β + ν) + ξ)) dΦ(ν;Σ) - y``
-
-where `θ = [β, uvec, ξ]` with `uvec = vector(cholesky(Σ).U)`.
-
-The integral is computed by monte-carlo integration. 
-"""
-function gmm_constraints(model::RCLogit)
-  function(θ)
-    (nsim,n,K) = size(model.ν)
-    β = θ[1:K]
-    uvec = θ[(K+1):(K+(K*(K+1))÷2)]
-    U =  zeros(eltype(uvec),K,K)
-    l = 1
-    for i in 1:K
-      for j in i:K
-        U[i,j] = uvec[l]
-        l = l+1
-      end
+    zunique=unique(model.z)
+    xz4=ones((size(zunique)))
+    u2z4=ones((size(zunique)))
+    for i=1:size(zunique,1)
+        xz4[i]=(sum(model.x.*(model.z.==zunique[i]),dims=1)/sum((model.z.==zunique[i]),dims=1))[1]
     end
-    ξ = θ[((K+(K*(K-1))÷2)+1):end]
-    share = zeros(eltype(θ), n)
-    for s in 1:nsim      
-      share += cdf.(Logistic(), model.x*β + sum(model.x.*(model.ν[s,:,:]*U),dims=2) .+ ξ)[:]
+    for i=1:size(zunique,1)
+        u2z4[i]=(sum(uhat_2sls.*uhat_2sls.*(model.z.==zunique[i]),dims=1)/sum((model.z.==zunique[i]),dims=1))[1]
     end
-    share /= nsim
-    return(share - model.y)
-  end
+    ratio4=xz4./u2z4
+    gz_hat=ones(n)
+    for i=1:n
+            for j=1:size(zunique,1)
+                if model.z[i]==zunique[j]
+                    gz_hat[i]=ratio4[j]
+                else
+                    gz_hat[i]=gz_hat[i]
+                end
+            end
+        end
+
+    return gz_hat
 end
 
+function get_gi(model::efficientIV)
+   function(β)
+        gz_hat=gz_hat(model::efficientIV)
+        ξ=y-model.x.*β
+        m=ξ.*gz_hat
+   end
+end
+
+function estimation(model::efficientIV)
+    gzhat=gz_hat(model::efficientIV)
+    β_gz_hat=(gzhat'*model.x)^(-1)*gzhat'*model.y
+    return (β_gz_hat)
+end
