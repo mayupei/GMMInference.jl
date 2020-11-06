@@ -1,22 +1,11 @@
 """
-    RCLogit <: GMMModel
+An `IVLogitShare` model consists of outcomes, `y` ∈ (0,1),  regressors
+`x` and instruments `z`.  The moment condition is
+``E[ g(z)(y-x β) ] = 0``
 
-A random coefficients logit model with endogeneity.
-An `RCLogit` model consists of outcomes, `y` ∈ (0,1),  regressors
-`x`, instruments `z`, and random draws `ν ∼ N(0,I)`.  The moment condition is
-
-``E[ξz] = 0``
-
-where
-
-`` y = ∫ exp(x(β + ν) + ξ)/(1 + exp(x(β + ν) + ξ)) dΦ(ν;Σ) ``
-
-where Φ(ν;Σ) is the normal distribution with variance Σ.
-
-The dimensions of `x`, `y`, `z`, and `ν` must be such that
-`length(y) == size(x,1) == size(z,1) == size(ν,2)`
-and
-`size(ν,3) == size(x,2) ≤ size(z,2)`.
+The dimensions of `x`, `y`, and `z` must be such that
+`length(y) == size(x,1) == size(z,1)`.
+In this version, `size(x,2) = size(z,2)=1`.
 """
 mutable struct efficientIV <: GMMModel
   x::Vector{Float64}
@@ -25,28 +14,19 @@ mutable struct efficientIV <: GMMModel
 end
 
 """
-    RCLogit(n::Integer, β::AbstractVector,
-            π::AbstractMatrix, Σ::AbstractMatrix,
-            ρ, nsim=100)
-
-Simulates a RCLogit model.
+efficientIV(n::Integer, β::Real, ρ::Real, π::Real, a::AbstractVector)
+Simulate an efficientIV model.
 
 # Arguments
-
 - `n` number of observations
-- `β` mean coefficients on `x`
-- `π` first stage coefficients `x = z*π + e`
-- `Σ` variance of random coefficients
-- `ρ` correlation between x[:,1] and structural error.
-- `nsim` number of draws of `ν` for monte-carlo integration
+- `β` coefficients on `x`
+- `π` first stage coefficients `x = z*π + v`
+- `ρ` correlation betwwen `v` and `ϵ`
+- `a` values that z take
+Returns an efficientIV model.
 """
 
-function efficientIV(n, β, ρ, π, a)
-    """
-    n:= sample size
-    β:= true beta
-    ρ:= correlation coefficient
-    """
+function efficientIV(n::Integer, β::Real, ρ::Real, π::Real, a::AbstractVector)
     # (a) generate z
     w=rand(n)
     w1=(w.<0.2)*1.0
